@@ -28,15 +28,14 @@ def create_cache_backend(config: CacheConfig) -> CacheProtocol:
             )
         case CacheBackend.FILE:
             if not config.storage_path:
-                raise ValueError("storage_path is required for file cache backend")
+                exc_message = "storage_path is required for file cache backend"
+                raise ValueError(exc_message)
 
             return FileCache(
                 storage_path=Path(config.storage_path),
                 max_size=config.max_size,
                 default_ttl_seconds=config.ttl_seconds,
             )
-        case _:
-            raise ValueError(f"Unknown cache backend: {config.backend}")
 
 
 def create_cache_manager(config: CacheConfig) -> CacheManager:

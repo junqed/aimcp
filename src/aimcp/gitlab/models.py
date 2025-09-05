@@ -5,18 +5,6 @@ from datetime import datetime
 from pydantic import BaseModel
 
 
-class GitLabFile(BaseModel):
-    """GitLab repository file information."""
-
-    id: str
-    name: str
-    path: str
-    type: str
-    mode: str
-    size: int | None = None
-    last_commit_id: str | None = None
-
-
 class GitLabFileContent(BaseModel):
     """GitLab file content response."""
 
@@ -62,29 +50,6 @@ class GitLabProject(BaseModel):
     http_url_to_repo: str
     created_at: datetime
     last_activity_at: datetime
-
-
-class GitLabBranch(BaseModel):
-    """GitLab branch information."""
-
-    name: str
-    merged: bool
-    protected: bool
-    default: bool
-    developers_can_push: bool
-    developers_can_merge: bool
-    can_push: bool
-    commit: GitLabCommit
-
-
-class GitLabTree(BaseModel):
-    """GitLab repository tree (directory listing)."""
-
-    id: str
-    name: str
-    path: str
-    type: str
-    mode: str
 
 
 class GitLabError(BaseModel):

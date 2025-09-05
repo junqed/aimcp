@@ -38,22 +38,14 @@ class ServerConfig(BaseModel):
     """Server configuration."""
 
     host: str = Field(default="127.0.0.1")
-    port: int = Field(default=8000)
+    port: int = Field(default=8000, ge=1, le=65535, description="Server port (1-65535)")
     transport: TransportType = Field(default=TransportType.STDIO)
     name: str = Field(default="AIMCP")
-
-    @field_validator("port")
-    @classmethod
-    def validate_port(cls, v: int) -> int:
-        """Validate server port range."""
-        if not 1 <= v <= 65535:
-            raise ValueError("Server port must be between 1 and 65535")
-        return v
 
 
 class GitLabRepository(BaseModel):
     """GitLab repository configuration."""
-    
+
     model_config = {"frozen": True}
 
     url: str
@@ -80,7 +72,8 @@ class GitLabConfig(BaseModel):
     def validate_token(cls, v: str) -> str:
         """Validate GitLab token is not empty."""
         if not v.strip():
-            raise ValueError("GitLab token is required and cannot be empty")
+            exc_message = "GitLab token is required and cannot be empty"
+            raise ValueError(exc_message)
         return v.strip()
 
     @field_validator("repositories")
@@ -88,7 +81,8 @@ class GitLabConfig(BaseModel):
     def validate_repositories(cls, v: list[GitLabRepository]) -> list[GitLabRepository]:
         """Validate at least one repository is configured."""
         if not v:
-            raise ValueError("At least one GitLab repository must be configured")
+            exc_message = "At least one GitLab repository must be configured"
+            raise ValueError(exc_message)
         return v
 
 
@@ -104,7 +98,8 @@ class CacheConfig(BaseModel):
     def validate_file_backend(self) -> "CacheConfig":
         """Validate file backend configuration."""
         if self.backend == CacheBackend.FILE and not self.storage_path:
-            raise ValueError("Storage path is required for file-based cache")
+            exc_message = "Storage path is required for file-based cache"
+            raise ValueError(exc_message)
         return self
 
 
@@ -130,7 +125,8 @@ class ToolConfig(BaseModel):
         """Validate conflict resolution strategy."""
         allowed = {"prefix", "priority", "error", "merge"}
         if v not in allowed:
-            raise ValueError(f"Conflict resolution strategy must be one of: {allowed}")
+            exc_message = f"Conflict resolution strategy must be one of: {allowed}"
+            raise ValueError(exc_message)
         return v
 
 
@@ -153,61 +149,55 @@ class AIMCPConfig(BaseSettings):
     tools: ToolConfig = Field(default_factory=ToolConfig)
 
     @classmethod
-    def from_yaml_file(
-        cls, file_path: Path, overrides: dict[str, Any] | None = None
-    ) -> "AIMCPConfig":
+    def from_yaml_file(cls, file_path: Path, overrides: dict[str, Any] | None = None) -> "AIMCPConfig":
         """Create configuration from YAML file with optional overrides.
-        
+
         Args:
             file_path: Path to YAML configuration file
             overrides: Optional dictionary of override values
-            
+
         Returns:
             Validated configuration instance
-            
+
         Raises:
             FileNotFoundError: If config file doesn't exist
             yaml.YAMLError: If config file is invalid YAML
             ValidationError: If configuration is invalid
         """
         if not file_path.exists():
-            raise FileNotFoundError(f"Configuration file not found: {file_path}")
+            exc_message = f"Configuration file not found: {file_path}"
+            raise FileNotFoundError(exc_message)
 
         try:
             with file_path.open("r", encoding="utf-8") as f:
                 file_data = yaml.safe_load(f) or {}
         except yaml.YAMLError as e:
-            raise yaml.YAMLError(f"Invalid YAML in config file {file_path}: {e}")
+            exc_message = f"Invalid YAML in config file {file_path}: {e}"
+            raise yaml.YAMLError(exc_message) from e
 
         # Apply overrides if provided
-        if overrides:
+        if overrides and any(k in overrides for k in ["host", "port", "transport"]):
             # Apply server overrides
-            if any(k in overrides for k in ["host", "port", "transport"]):
-                server_data = file_data.setdefault("server", {})
-                for key in ["host", "port", "transport"]:
-                    if key in overrides:
-                        server_data[key] = overrides[key]
+            server_data = file_data.setdefault("server", {})
+            for key in ["host", "port", "transport"]:
+                if key in overrides:
+                    server_data[key] = overrides[key]
 
         return cls.model_validate(file_data)
 
     @classmethod
-    def create(
-        cls, 
-        config_path: Path | None = None, 
-        overrides: dict[str, Any] | None = None
-    ) -> "AIMCPConfig":
+    def create(cls, config_path: Path | None = None, overrides: dict[str, Any] | None = None) -> "AIMCPConfig":
         """Create configuration from file and environment with overrides.
-        
+
         Args:
             config_path: Optional path to configuration file
             overrides: Optional settings to override
-            
+
         Returns:
             Validated AIMCP configuration
         """
         if config_path:
             return cls.from_yaml_file(config_path, overrides)
-        else:
-            # Load from environment variables only
-            config_data = overrides or {}
-            return cls.model_validate(config_data)
+        # Load from environment variables only
+        config_data = overrides or {}
+        return cls.model_validate(config_data)

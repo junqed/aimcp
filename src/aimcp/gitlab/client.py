@@ -2,7 +2,8 @@
 
 import asyncio
 import base64
-import fnmatch
+from http import HTTPStatus
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -10,14 +11,8 @@ from httpx import AsyncClient, Response
 
 from ..config.models import GitLabConfig, GitLabRepository
 from ..utils.logging import get_logger
-from .models import (
-    GitLabBranch,
-    GitLabError,
-    GitLabFile,
-    GitLabFileContent,
-    GitLabProject,
-    GitLabTree,
-)
+from .models import GitLabError, GitLabFileContent, GitLabProject
+
 
 logger = get_logger("gitlab")
 
@@ -68,7 +63,7 @@ class GitLabClient:
         self,
         method: str,
         endpoint: str,
-        **kwargs,  # type: ignore
+        **kwargs: Any,
     ) -> Response:
         """Make HTTP request to GitLab API.
 
@@ -87,24 +82,22 @@ class GitLabClient:
 
         for attempt in range(self.config.max_retries + 1):
             try:
-                logger.debug(
-                    "Making GitLab API request", method=method, url=url, attempt=attempt
-                )
+                logger.debug("Making GitLab API request", method=method, url=url, attempt=attempt)
 
                 response = await self.client.request(method, url, **kwargs)
 
-                if response.status_code == 429:  # Rate limit
-                    if attempt < self.config.max_retries:
-                        wait_time = 2**attempt
-                        logger.warning(
-                            "Rate limited, retrying",
-                            wait_time=wait_time,
-                            attempt=attempt,
-                        )
-                        await asyncio.sleep(wait_time)
-                        continue
+                # Rate limit check
+                if response.status_code == HTTPStatus.TOO_MANY_REQUESTS and attempt < self.config.max_retries:
+                    wait_time = 2**attempt
+                    logger.warning(
+                        "Rate limited, retrying",
+                        wait_time=wait_time,
+                        attempt=attempt,
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
 
-                if response.status_code >= 400:
+                if response.status_code >= HTTPStatus.BAD_REQUEST:
                     try:
                         error_data = response.json()
                         error = GitLabError(**error_data)
@@ -114,10 +107,7 @@ class GitLabClient:
 
                     raise GitLabClientError(message, response.status_code)
 
-                logger.debug(
-                    "GitLab API request successful", status_code=response.status_code
-                )
-                return response
+                logger.debug("GitLab API request successful", status_code=response.status_code)
 
             except httpx.RequestError as e:
                 if attempt < self.config.max_retries:
@@ -130,9 +120,13 @@ class GitLabClient:
                     )
                     await asyncio.sleep(wait_time)
                     continue
-                raise GitLabClientError(f"Request failed: {e}")
+                exc_message = f"Request failed: {e}"
+                raise GitLabClientError(exc_message) from e
+            else:
+                return response
 
-        raise GitLabClientError("Max retries exceeded")
+        exc_message = "Max retries exceeded"
+        raise GitLabClientError(exc_message)
 
     async def get_project(self, project_path: str) -> GitLabProject:
         """Get project information.
@@ -146,53 +140,6 @@ class GitLabClient:
         encoded_path = quote(project_path, safe="")
         response = await self._make_request("GET", f"/projects/{encoded_path}")
         return GitLabProject(**response.json())
-
-    async def get_branches(self, project_path: str) -> list[GitLabBranch]:
-        """Get project branches.
-
-        Args:
-            project_path: Project path
-
-        Returns:
-            List of branches
-        """
-        encoded_path = quote(project_path, safe="")
-        response = await self._make_request(
-            "GET", f"/projects/{encoded_path}/repository/branches"
-        )
-        return [GitLabBranch(**branch) for branch in response.json()]
-
-    async def get_tree(
-        self,
-        project_path: str,
-        ref: str = "main",
-        path: str = "",
-        recursive: bool = False,
-    ) -> list[GitLabTree]:
-        """Get repository tree (directory listing).
-
-        Args:
-            project_path: Project path
-            ref: Git reference (branch, tag, commit)
-            path: Path within repository
-            recursive: Whether to get recursive listing
-
-        Returns:
-            List of tree entries
-        """
-        encoded_path = quote(project_path, safe="")
-        params = {"ref": ref}
-        if path:
-            params["path"] = path
-        if recursive:
-            params["recursive"] = "true"
-
-        response = await self._make_request(
-            "GET",
-            f"/projects/{encoded_path}/repository/tree",
-            params=params,
-        )
-        return [GitLabTree(**entry) for entry in response.json()]
 
     async def get_file(
         self,
@@ -242,57 +189,8 @@ class GitLabClient:
         if file_info.encoding == "base64":
             content_bytes = base64.b64decode(file_info.content)
             return content_bytes.decode("utf-8")
-        else:
-            # Assume text content
-            return file_info.content
-
-    async def find_files_by_pattern(
-        self,
-        project_path: str,
-        patterns: list[str],
-        ref: str = "main",
-        path: str = "",
-    ) -> list[GitLabFile]:
-        """Find files matching glob patterns.
-
-        Args:
-            project_path: Project path
-            patterns: List of glob patterns to match
-            ref: Git reference
-            path: Root path to search from
-
-        Returns:
-            List of matching files
-        """
-        # Get recursive tree listing
-        tree_entries = await self.get_tree(project_path, ref, path, recursive=True)
-
-        matching_files = []
-        for entry in tree_entries:
-            if entry.type != "blob":  # Only files, not directories
-                continue
-
-            # Check if file matches any pattern
-            for pattern in patterns:
-                if fnmatch.fnmatch(entry.path, pattern):
-                    file_info = GitLabFile(
-                        id=entry.id,
-                        name=entry.name,
-                        path=entry.path,
-                        type=entry.type,
-                        mode=entry.mode,
-                    )
-                    matching_files.append(file_info)
-                    break
-
-        logger.info(
-            "Found matching files",
-            project=project_path,
-            patterns=patterns,
-            count=len(matching_files),
-        )
-
-        return matching_files
+        # Assume text content
+        return file_info.content
 
     async def check_tools_json_exists(self, repository: GitLabRepository) -> bool:
         """Check if tools.json exists in a repository.
@@ -309,12 +207,13 @@ class GitLabClient:
                 "tools.json",
                 repository.branch,
             )
-            return True
         except GitLabClientError as e:
-            if e.status_code == 404:
+            if e.status_code == HTTPStatus.NOT_FOUND:
                 return False
             # Re-raise other errors
             raise
+        else:
+            return True
 
     async def fetch_tools_json(self, repository: GitLabRepository) -> str:
         """Fetch tools.json content from a repository.
@@ -328,9 +227,7 @@ class GitLabClient:
         Raises:
             GitLabClientError: If file doesn't exist or fetch fails
         """
-        logger.info(
-            "Fetching tools.json", repository=repository.url, branch=repository.branch
-        )
+        logger.info("Fetching tools.json", repository=repository.url, branch=repository.branch)
 
         try:
             content = await self.get_file_content_decoded(
@@ -339,17 +236,13 @@ class GitLabClient:
                 repository.branch,
             )
 
-            logger.debug(
-                "Fetched tools.json", repository=repository.url, size=len(content)
-            )
-
-            return content
+            logger.debug("Fetched tools.json", repository=repository.url, size=len(content))
 
         except GitLabClientError as e:
-            logger.error(
-                "Failed to fetch tools.json", repository=repository.url, error=str(e)
-            )
+            logger.exception("Failed to fetch tools.json", repository=repository.url, error=str(e))
             raise
+        else:
+            return content
 
     async def test_connection(self) -> dict[str, str]:
         """Test GitLab API connection.

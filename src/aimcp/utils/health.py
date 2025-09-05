@@ -1,7 +1,7 @@
 """Health check utilities for monitoring system status."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
 
@@ -10,7 +10,10 @@ from ..config.models import GitLabRepository
 from ..gitlab.client import GitLabClient
 from .logging import get_logger
 
+
 logger = get_logger("health")
+
+LOW_HIT_RATE_LIMIT = 0.5
 
 
 class HealthStatus(StrEnum):
@@ -33,7 +36,7 @@ class HealthCheckResult:
 
     def __post_init__(self) -> None:
         if self.checked_at is None:
-            self.checked_at = datetime.now()
+            self.checked_at = datetime.now(tz=UTC)
 
 
 @dataclass(slots=True)
@@ -58,7 +61,7 @@ class SystemHealth:
         return cls(
             status=overall_status,
             checks=checks,
-            checked_at=datetime.now(),
+            checked_at=datetime.now(tz=UTC),
         )
 
 
@@ -100,18 +103,14 @@ class GitLabHealthChecker:
                         await self.gitlab_client.get_project(repo.url)
                         accessible_repos += 1
                     except Exception as e:
-                        logger.warning(
-                            "Repository check failed", repository=repo.url, error=str(e)
-                        )
+                        logger.warning("Repository check failed", repository=repo.url, error=str(e))
 
                 if accessible_repos == 0:
                     status = HealthStatus.UNHEALTHY
                     message = "No repositories accessible"
                 elif accessible_repos < total_repos:
                     status = HealthStatus.DEGRADED
-                    message = (
-                        f"Only {accessible_repos}/{total_repos} repositories accessible"
-                    )
+                    message = f"Only {accessible_repos}/{total_repos} repositories accessible"
                 else:
                     status = HealthStatus.HEALTHY
                     message = "All repositories accessible"
@@ -122,20 +121,18 @@ class GitLabHealthChecker:
                     message=message,
                     details={
                         "user": connection_result.get("user", "unknown"),
-                        "gitlab_version": connection_result.get(
-                            "gitlab_version", "unknown"
-                        ),
+                        "gitlab_version": connection_result.get("gitlab_version", "unknown"),
                         "accessible_repos": accessible_repos,
                         "total_repos": total_repos,
                     },
                 )
 
         except Exception as e:
-            logger.error("GitLab health check failed", error=str(e))
+            logger.exception("GitLab health check failed", error=str(e))
             return HealthCheckResult(
                 component="gitlab",
                 status=HealthStatus.UNHEALTHY,
-                message=f"GitLab health check failed: {str(e)}",
+                message=f"GitLab health check failed: {e!s}",
             )
 
 
@@ -155,7 +152,7 @@ class CacheHealthChecker:
                 if stats.item_count == 0:
                     status = HealthStatus.DEGRADED
                     message = "Cache is empty"
-                elif stats.hit_rate < 0.5:
+                elif stats.hit_rate < LOW_HIT_RATE_LIMIT:
                     status = HealthStatus.DEGRADED
                     message = f"Low cache hit rate: {stats.hit_rate:.2%}"
                 else:
@@ -170,14 +167,10 @@ class CacheHealthChecker:
                 }
 
                 if stats.memory_usage_bytes:
-                    details["memory_usage_mb"] = (
-                        f"{stats.memory_usage_bytes / 1024 / 1024:.2f}"
-                    )
+                    details["memory_usage_mb"] = f"{stats.memory_usage_bytes / 1024 / 1024:.2f}"
 
                 if stats.storage_usage_bytes:
-                    details["storage_usage_mb"] = (
-                        f"{stats.storage_usage_bytes / 1024 / 1024:.2f}"
-                    )
+                    details["storage_usage_mb"] = f"{stats.storage_usage_bytes / 1024 / 1024:.2f}"
 
                 return HealthCheckResult(
                     component="cache",
@@ -187,11 +180,11 @@ class CacheHealthChecker:
                 )
 
         except Exception as e:
-            logger.error("Cache health check failed", error=str(e))
+            logger.exception("Cache health check failed", error=str(e))
             return HealthCheckResult(
                 component="cache",
                 status=HealthStatus.UNHEALTHY,
-                message=f"Cache health check failed: {str(e)}",
+                message=f"Cache health check failed: {e!s}",
             )
 
 
@@ -211,7 +204,7 @@ class SystemHealthChecker:
                 result = await checker.check_health()
                 checks.append(result)
             except Exception as e:
-                logger.error(
+                logger.exception(
                     "Health checker failed",
                     checker=type(checker).__name__,
                     error=str(e),
@@ -220,7 +213,7 @@ class SystemHealthChecker:
                     HealthCheckResult(
                         component="unknown",
                         status=HealthStatus.UNHEALTHY,
-                        message=f"Health checker failed: {str(e)}",
+                        message=f"Health checker failed: {e!s}",
                     )
                 )
 

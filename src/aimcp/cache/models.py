@@ -1,13 +1,16 @@
 """Cache-related data models."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-# Type alias for cache keys
-CacheKey = str
+
+type CacheKey = str
+
+# Constants
+CACHE_KEY_PARTS_COUNT = 3  # repository_url:branch:file_path
 
 
 @dataclass
@@ -28,7 +31,7 @@ class CacheEntry:
             return False
 
         expiry_time = self.created_at + timedelta(seconds=self.ttl_seconds)
-        return datetime.now() > expiry_time
+        return datetime.now(tz=UTC) > expiry_time
 
     @property
     def expires_at(self) -> datetime | None:
@@ -40,7 +43,7 @@ class CacheEntry:
     def access(self) -> None:
         """Mark entry as accessed."""
         self.access_count += 1
-        self.last_accessed = datetime.now()
+        self.last_accessed = datetime.now(tz=UTC)
 
 
 class CacheStats(BaseModel):
@@ -68,31 +71,6 @@ class CacheStats(BaseModel):
         return 1.0 - self.hit_rate
 
 
-class RepositoryCacheKey(BaseModel):
-    """Repository-specific cache key."""
-
-    repository_url: str = Field(description="Repository URL")
-    branch: str = Field(description="Branch name")
-    file_path: str = Field(description="File path within repository")
-
-    def to_key(self) -> CacheKey:
-        """Convert to string cache key."""
-        return f"{self.repository_url}:{self.branch}:{self.file_path}"
-
-    @classmethod
-    def from_key(cls, key: CacheKey) -> "RepositoryCacheKey":
-        """Parse cache key back to components."""
-        parts = key.split(":", 2)
-        if len(parts) != 3:
-            raise ValueError(f"Invalid cache key format: {key}")
-
-        return cls(
-            repository_url=parts[0],
-            branch=parts[1],
-            file_path=parts[2],
-        )
-
-
 class CacheConfiguration(BaseModel):
     """Runtime cache configuration."""
 
@@ -101,6 +79,4 @@ class CacheConfiguration(BaseModel):
     max_size: int = Field(description="Maximum cache size")
     storage_path: str | None = Field(default=None)
     cleanup_interval_seconds: int = Field(default=300, description="Cleanup interval")
-    enable_statistics: bool = Field(
-        default=True, description="Enable statistics collection"
-    )
+    enable_statistics: bool = Field(default=True, description="Enable statistics collection")

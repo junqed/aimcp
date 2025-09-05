@@ -7,12 +7,13 @@ import sys
 import tempfile
 from collections import OrderedDict
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from ..utils.logging import get_logger
 from .models import CacheEntry, CacheKey, CacheStats
+
 
 logger = get_logger("cache")
 
@@ -71,7 +72,7 @@ class MemoryCache:
 
             entry = CacheEntry(
                 value=value,
-                created_at=datetime.now(),
+                created_at=datetime.now(tz=UTC),
                 ttl_seconds=ttl,
                 size_bytes=size_bytes,
             )
@@ -131,9 +132,8 @@ class MemoryCache:
 
         for key in keys_list:
             # Check if still valid
-            if await self.exists(key):
-                if pattern is None or fnmatch.fnmatch(key, pattern):
-                    yield key
+            if await self.exists(key) and (pattern is None or fnmatch.fnmatch(key, pattern)):
+                yield key
 
     async def size(self) -> int:
         """Get cache size."""
@@ -142,11 +142,7 @@ class MemoryCache:
     async def get_stats(self) -> CacheStats:
         """Get cache statistics."""
         async with self._lock:
-            memory_usage = sum(
-                entry.size_bytes or 0
-                for entry in self._cache.values()
-                if entry.size_bytes is not None
-            )
+            memory_usage = sum(entry.size_bytes or 0 for entry in self._cache.values() if entry.size_bytes is not None)
 
             timestamps = [entry.created_at for entry in self._cache.values()]
 
@@ -162,9 +158,7 @@ class MemoryCache:
     async def cleanup_expired(self) -> int:
         """Clean up expired entries."""
         async with self._lock:
-            expired_keys = [
-                key for key, entry in self._cache.items() if entry.is_expired
-            ]
+            expired_keys = [key for key, entry in self._cache.items() if entry.is_expired]
 
             for key in expired_keys:
                 del self._cache[key]
@@ -184,12 +178,9 @@ class MemoryCache:
         try:
             if isinstance(value, str):
                 return len(value.encode("utf-8"))
-            elif isinstance(value, int | float):
+            if isinstance(value, int | float | (list | tuple | dict)):
                 return sys.getsizeof(value)
-            elif isinstance(value, list | tuple | dict):
-                return sys.getsizeof(value)
-            else:
-                return sys.getsizeof(str(value))
+            return sys.getsizeof(str(value))
         except Exception:
             return 0
 
@@ -239,20 +230,18 @@ class FileCache:
         try:
             index_data = {
                 "stats": self._stats.model_dump(),
-                "updated_at": datetime.now().isoformat(),
+                "updated_at": datetime.now(tz=UTC).isoformat(),
             }
 
             # Atomic write
-            with tempfile.NamedTemporaryFile(
-                mode="w", dir=self.storage_path, delete=False
-            ) as f:
+            with tempfile.NamedTemporaryFile(mode="w", dir=self.storage_path, delete=False) as f:
                 json.dump(index_data, f, indent=2)
                 temp_path = Path(f.name)
 
             temp_path.replace(self.index_path)
 
         except Exception as e:
-            logger.error("Failed to save cache index", error=str(e))
+            logger.exception("Failed to save cache index", error=str(e))
 
     def _get_file_path(self, key: CacheKey) -> Path:
         """Get file path for cache key."""
@@ -278,9 +267,7 @@ class FileCache:
                 created_at=datetime.fromisoformat(data["created_at"]),
                 ttl_seconds=data.get("ttl_seconds"),
                 access_count=data.get("access_count", 0),
-                last_accessed=datetime.fromisoformat(data["last_accessed"])
-                if data.get("last_accessed")
-                else None,
+                last_accessed=datetime.fromisoformat(data["last_accessed"]) if data.get("last_accessed") else None,
                 size_bytes=data.get("size_bytes"),
             )
 
@@ -297,12 +284,13 @@ class FileCache:
             await self._save_entry(key, entry)
 
             self._stats.hit_count += 1
-            return entry.value
 
         except Exception as e:
-            logger.error("Failed to read cache file", key=key, error=str(e))
+            logger.exception("Failed to read cache file", key=key, error=str(e))
             self._stats.miss_count += 1
             return None
+        else:
+            return entry.value
 
     async def set(
         self,
@@ -316,11 +304,9 @@ class FileCache:
 
             entry = CacheEntry(
                 value=value,
-                created_at=datetime.now(),
+                created_at=datetime.now(tz=UTC),
                 ttl_seconds=ttl,
-                size_bytes=len(str(value).encode("utf-8"))
-                if isinstance(value, str)
-                else None,
+                size_bytes=len(str(value).encode("utf-8")) if isinstance(value, str) else None,
             )
 
             await self._save_entry(key, entry)
@@ -344,9 +330,7 @@ class FileCache:
             "created_at": entry.created_at.isoformat(),
             "ttl_seconds": entry.ttl_seconds,
             "access_count": entry.access_count,
-            "last_accessed": entry.last_accessed.isoformat()
-            if entry.last_accessed
-            else None,
+            "last_accessed": entry.last_accessed.isoformat() if entry.last_accessed else None,
             "size_bytes": entry.size_bytes,
         }
 
@@ -425,14 +409,11 @@ class FileCache:
                     data = json.load(f)
                     key = data.get("key")
 
-                    if key and await self.exists(key):
-                        if pattern is None or fnmatch.fnmatch(key, pattern):
-                            yield key
+                    if key and await self.exists(key) and (pattern is None or fnmatch.fnmatch(key, pattern)):
+                        yield key
 
             except Exception as e:
-                logger.warning(
-                    "Failed to read cache file", file=file_path, error=str(e)
-                )
+                logger.warning("Failed to read cache file", file=file_path, error=str(e))
                 continue
 
     async def size(self) -> int:
@@ -445,18 +426,14 @@ class FileCache:
     async def get_stats(self) -> CacheStats:
         """Get cache statistics."""
         # Calculate storage usage
-        storage_usage = sum(
-            f.stat().st_size
-            for f in self.storage_path.glob("*.json")
-            if f != self.index_path
-        )
+        storage_usage = sum(f.stat().st_size for f in self.storage_path.glob("*.json") if f != self.index_path)
 
         # Get file timestamps
         timestamps = []
         for file_path in self.storage_path.glob("*.json"):
             if file_path == self.index_path:
                 continue
-            timestamps.append(datetime.fromtimestamp(file_path.stat().st_mtime))
+            timestamps.append(datetime.fromtimestamp(file_path.stat().st_mtime, tz=UTC))
 
         current_stats = await self.size()
 

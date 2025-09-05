@@ -8,6 +8,7 @@ from typing import Any, TypeVar
 
 from .logging import get_logger
 
+
 logger = get_logger("errors")
 
 T = TypeVar("T")
@@ -42,6 +43,17 @@ class NetworkError(AIMCPError):
     """Network connectivity errors."""
 
 
+class ServerNotInitializedError(MCPError):
+    """Raised when MCP server is not initialized."""
+
+    def __init__(self, details: dict[str, Any] | None = None) -> None:
+        super().__init__("Server not initialized", details)
+
+
+class ResourceURIError(AIMCPError):
+    """Raised when resource URI is invalid or malformed."""
+
+
 def retry_async(
     max_attempts: int = 3,
     delay: float = 1.0,
@@ -70,7 +82,7 @@ def retry_async(
                     return await func(*args, **kwargs)
                 except exceptions as e:
                     if attempt == max_attempts - 1:
-                        logger.error(
+                        logger.exception(
                             "Retry exhausted for function",
                             function=func.__name__,
                             attempt=attempt + 1,
@@ -121,7 +133,7 @@ async def error_context(
         yield
         logger.debug("Operation completed successfully", operation=operation)
     except Exception as e:
-        logger.error(
+        logger.exception(
             "Operation failed",
             operation=operation,
             error_type=type(e).__name__,
@@ -161,17 +173,15 @@ async def resource_cleanup(*resources: Any) -> AsyncGenerator[None]:
                         resource_type=type(resource).__name__,
                     )
             except Exception as e:
-                cleanup_errors.append(f"{type(resource).__name__}: {str(e)}")
-                logger.error(
+                cleanup_errors.append(f"{type(resource).__name__}: {e!s}")
+                logger.exception(
                     "Failed to cleanup resource",
                     resource_type=type(resource).__name__,
                     error=str(e),
                 )
 
         if cleanup_errors:
-            logger.warning(
-                "Some resources failed to cleanup properly", errors=cleanup_errors
-            )
+            logger.warning("Some resources failed to cleanup properly", errors=cleanup_errors)
 
 
 def handle_async_errors(
@@ -248,7 +258,7 @@ class ErrorCollector:
 
         error_lines = [f"Operation '{self.operation}' had {len(self.errors)} errors:"]
         for context, error in self.errors:
-            error_lines.append(f"  - {context}: {str(error)}")
+            error_lines.append(f"  - {context}: {error!s}")
 
         return "\n".join(error_lines)
 
@@ -260,9 +270,6 @@ class ErrorCollector:
                 details={
                     "operation": self.operation,
                     "error_count": len(self.errors),
-                    "errors": [
-                        {"context": context, "error": str(error)}
-                        for context, error in self.errors
-                    ],
+                    "errors": [{"context": context, "error": str(error)} for context, error in self.errors],
                 },
             )

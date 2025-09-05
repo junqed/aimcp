@@ -2,10 +2,11 @@
 
 import logging
 import sys
+from typing import cast
 
+import orjson
 import structlog
 from structlog.typing import FilteringBoundLogger
-import orjson
 
 from ..config.models import LoggingConfig
 
@@ -49,11 +50,10 @@ def setup_logging(config: LoggingConfig) -> FilteringBoundLogger | logging.Logge
             cache_logger_on_first_use=True,
         )
 
-        return structlog.get_logger("aimcp")
-    else:
-        # Use standard logging
-        logger = logging.getLogger("aimcp")
-        return logger
+        return get_logger()
+
+    # Use standard logging
+    return logging.getLogger("aimcp")
 
 
 def get_logger(name: str | None = None) -> FilteringBoundLogger:
@@ -65,6 +65,6 @@ def get_logger(name: str | None = None) -> FilteringBoundLogger:
     Returns:
         Logger instance
     """
-    if name:
-        return structlog.get_logger(f"aimcp.{name}")
-    return structlog.get_logger("aimcp")
+    logger = structlog.get_logger(f"aimcp.{name}") if name else structlog.get_logger("aimcp")
+
+    return cast("FilteringBoundLogger", logger)

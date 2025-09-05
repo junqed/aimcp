@@ -2,19 +2,18 @@
 
 from urllib.parse import urlparse
 
+from ..utils.errors import ResourceURIError
 from ..utils.logging import get_logger
 
+
 logger = get_logger("tools.resources")
-
-
-class ResourceURIError(Exception):
-    """Error in resource URI handling."""
 
 
 class ResourceURIHandler:
     """Handles aimcp:// resource URI scheme."""
 
     SCHEME = "aimcp"
+    MIN_PATH_PARTS = 2  # branch and file path
 
     @classmethod
     def parse_uri(cls, uri: str) -> tuple[str, str, str]:
@@ -30,37 +29,41 @@ class ResourceURIHandler:
             ResourceURIError: If URI format is invalid
         """
         if not uri.startswith(f"{cls.SCHEME}://"):
-            raise ResourceURIError(f"Invalid URI scheme: {uri}")
+            exc_message = f"Invalid URI scheme: {uri}"
+            raise ResourceURIError(exc_message)
 
         try:
             parsed = urlparse(uri)
 
             if parsed.scheme != cls.SCHEME:
-                raise ResourceURIError(
-                    f"Expected scheme '{cls.SCHEME}', got '{parsed.scheme}'"
-                )
+                exc_message = f"Expected scheme '{cls.SCHEME}', got '{parsed.scheme}'"
+                raise ResourceURIError(exc_message)
 
             # Extract repository from netloc (host part)
             repository = parsed.netloc
             if not repository:
-                raise ResourceURIError("Missing repository in URI")
+                exc_message = "Missing repository in URI"
+                raise ResourceURIError(exc_message)
 
             # Extract branch and file path from path
             path_parts = parsed.path.lstrip("/").split("/", 1)
-            if len(path_parts) < 2:
-                raise ResourceURIError("URI must include branch and file path")
+            if len(path_parts) < cls.MIN_PATH_PARTS:
+                exc_message = "URI must include branch and file path"
+                raise ResourceURIError(exc_message)
 
             branch, file_path = path_parts
 
             if not branch:
-                raise ResourceURIError("Missing branch in URI")
+                exc_message = "Missing branch in URI"
+                raise ResourceURIError(exc_message)
             if not file_path:
-                raise ResourceURIError("Missing file path in URI")
-
-            return repository, branch, file_path
-
+                exc_message = "Missing file path in URI"
+                raise ResourceURIError(exc_message)
         except ValueError as e:
-            raise ResourceURIError(f"Invalid URI format: {uri}") from e
+            exc_test = f"Invalid URI format: {uri}"
+            raise ResourceURIError(exc_test) from e
+        else:
+            return repository, branch, file_path
 
     @classmethod
     def build_uri(cls, repository: str, branch: str, file_path: str) -> str:
@@ -93,9 +96,10 @@ class ResourceURIHandler:
         """
         try:
             cls.parse_uri(uri)
-            return True
         except ResourceURIError:
             return False
+        else:
+            return True
 
     @classmethod
     def is_aimcp_uri(cls, uri: str) -> bool:

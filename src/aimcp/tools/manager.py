@@ -1,7 +1,9 @@
 """Tool specification manager."""
 
 import json
-from typing import Any
+from dataclasses import dataclass, field
+from http import HTTPStatus
+from typing import cast
 
 from ..cache.manager import CacheManager
 from ..config.models import AIMCPConfig, GitLabRepository
@@ -10,6 +12,7 @@ from ..utils.logging import get_logger
 from .models import ConflictResolutionStrategy, ResolvedTool, ToolsSpecification
 from .resolver import ToolResolver
 
+
 logger = get_logger("tools.manager")
 
 
@@ -17,28 +20,18 @@ class ToolSpecificationError(Exception):
     """Error in tool specification processing."""
 
 
+@dataclass(slots=True)
 class ToolManager:
     """Manages tool specifications from repositories."""
 
-    def __init__(
-        self,
-        config: AIMCPConfig,
-        cache_manager: CacheManager,
-        gitlab_client: GitLabClient,
-    ) -> None:
-        """Initialize tool manager.
+    config: AIMCPConfig
+    cache_manager: CacheManager
+    gitlab_client: GitLabClient
+    resolver: ToolResolver = field(init=False)
 
-        Args:
-            config: AIMCP configuration
-            cache_manager: Cache manager instance
-            gitlab_client: GitLab client instance
-        """
-        self.config = config
-        self.cache_manager = cache_manager
-        self.gitlab_client = gitlab_client
-        self.resolver = ToolResolver(
-            ConflictResolutionStrategy.PREFIX
-        )  # Default strategy
+    def __post_init__(self) -> None:
+        """Initialize resolver after dataclass initialization."""
+        self.resolver = ToolResolver(ConflictResolutionStrategy.PREFIX)  # Default strategy
 
     async def load_all_tools(self) -> list[ResolvedTool]:
         """Load and resolve tools from all configured repositories.
@@ -65,12 +58,10 @@ class ToolManager:
                         tool_count=len(spec.tools),
                     )
                 else:
-                    logger.warning(
-                        "Repository has no tools.json, skipping", repository=repo.url
-                    )
+                    logger.warning("Repository has no tools.json, skipping", repository=repo.url)
 
             except Exception as e:
-                logger.error(
+                logger.exception(
                     "Failed to load tools from repository",
                     repository=repo.url,
                     error=str(e),
@@ -98,16 +89,14 @@ class ToolManager:
                 total_tools=len(resolved_tools),
                 repositories=len(repo_tools),
             )
-
+        except Exception as e:
+            logger.exception("Failed to resolve tool conflicts", error=str(e))
+            exc_message = f"Tool conflict resolution failed: {e}"
+            raise ToolSpecificationError(exc_message) from e
+        else:
             return resolved_tools
 
-        except Exception as e:
-            logger.error("Failed to resolve tool conflicts", error=str(e))
-            raise ToolSpecificationError(f"Tool conflict resolution failed: {e}") from e
-
-    async def _load_repository_tools(
-        self, repository: GitLabRepository
-    ) -> ToolsSpecification | None:
+    async def _load_repository_tools(self, repository: GitLabRepository) -> ToolsSpecification | None:
         """Load tool specification from a single repository.
 
         Args:
@@ -122,9 +111,7 @@ class ToolManager:
         try:
             cached_spec = await self.cache_manager.get(cache_key)
             if cached_spec:
-                logger.debug(
-                    "Using cached tool specification", repository=repository.url
-                )
+                logger.debug("Using cached tool specification", repository=repository.url)
                 return ToolsSpecification(**cached_spec)
         except Exception as e:
             logger.debug(
@@ -158,34 +145,27 @@ class ToolManager:
                     repository=repository.url,
                     tool_count=len(spec.tools),
                 )
-
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.exception("Invalid tools.json format", repository=repository.url, error=str(e))
+                exc_message = f"Invalid tools.json in {repository.url}: {e}"
+                raise ToolSpecificationError(exc_message) from e
+            else:
                 return spec
 
-            except (json.JSONDecodeError, ValueError) as e:
-                logger.error(
-                    "Invalid tools.json format", repository=repository.url, error=str(e)
-                )
-                raise ToolSpecificationError(
-                    f"Invalid tools.json in {repository.url}: {e}"
-                ) from e
-
         except GitLabClientError as e:
-            if e.status_code == 404:
+            if e.status_code == HTTPStatus.NOT_FOUND:
                 # tools.json not found - this is expected for some repositories
-                logger.debug(
-                    "tools.json not found in repository", repository=repository.url
-                )
+                logger.debug("tools.json not found in repository", repository=repository.url)
                 return None
-            else:
-                # Other GitLab errors
-                logger.error(
-                    "Failed to fetch tools.json",
-                    repository=repository.url,
-                    error=str(e),
-                )
-                raise ToolSpecificationError(
-                    f"Failed to fetch tools.json from {repository.url}: {e}"
-                ) from e
+            # Other GitLab errors
+            logger.exception(
+                "Failed to fetch tools.json",
+                repository=repository.url,
+                error=str(e),
+            )
+
+            exc_message = f"Failed to fetch tools.json from {repository.url}: {e}"
+            raise ToolSpecificationError(exc_message) from e
 
     async def get_resource_content(self, resource_uri: str) -> str:
         """Fetch content for a resource URI.
@@ -201,29 +181,14 @@ class ToolManager:
         """
         # Parse URI
         if not resource_uri.startswith("aimcp://"):
-            raise ToolSpecificationError(f"Invalid resource URI scheme: {resource_uri}")
+            exc_message = f"Invalid resource URI scheme: {resource_uri}"
+            raise ToolSpecificationError(exc_message)
 
         try:
             # Extract components: aimcp://repo/branch/file/path
             uri_parts = resource_uri[8:]  # Remove 'aimcp://'
-            
-            # Find the branch part by looking for configured repos
-            # Since repository URLs can contain slashes, we need to match against config
-            repository = None
-            branch = None
-            file_path = None
-            
-            for repo in self.config.gitlab.repositories:
-                # Check if URI starts with this repository URL and branch
-                expected_prefix = f"{repo.url}/{repo.branch}/"
-                if uri_parts.startswith(expected_prefix):
-                    repository = repo.url
-                    branch = repo.branch  
-                    file_path = uri_parts[len(expected_prefix):]
-                    break
-            
-            if not repository or not branch or not file_path:
-                raise ValueError("Could not parse repository, branch, and file path from URI")
+
+            repository, branch, file_path = self._find_repo_data(uri_parts=uri_parts)
 
             # Find the repository config (we already validated it exists above)
             repo_config = None
@@ -233,9 +198,8 @@ class ToolManager:
                     break
 
             if not repo_config:
-                raise ToolSpecificationError(
-                    f"Repository {repository}:{branch} not in configuration"
-                )
+                exc_message = f"Repository {repository}:{branch} not in configuration"
+                raise ToolSpecificationError(exc_message)
 
             # Check if file is in allowed resources
             await self._validate_resource_access(repo_config, file_path)
@@ -245,17 +209,16 @@ class ToolManager:
 
             # Try cache first
             try:
-                cached_content = await self.cache_manager.get(cache_key)
+                cached_content = cast("str", await self.cache_manager.get(cache_key))
+            except Exception:
+                logger.warning("Cache miss, continue to fetch")
+            else:
                 if cached_content:
                     logger.debug("Using cached resource content", uri=resource_uri)
                     return cached_content
-            except Exception:
-                pass  # Cache miss, continue to fetch
 
             # Fetch from GitLab
-            content = await self.gitlab_client.get_file_content_decoded(
-                repository, file_path, branch
-            )
+            content = await self.gitlab_client.get_file_content_decoded(repository, file_path, branch)
 
             # Cache content
             await self.cache_manager.set(
@@ -269,21 +232,29 @@ class ToolManager:
                 uri=resource_uri,
                 size=len(content),
             )
-
+        except (ValueError, IndexError) as e:
+            exc_message = f"Invalid resource URI format: {resource_uri}"
+            raise ToolSpecificationError() from e
+        except GitLabClientError as e:
+            exc_message = f"Failed to fetch resource {resource_uri}: {e}"
+            raise ToolSpecificationError(exc_message) from e
+        else:
             return content
 
-        except (ValueError, IndexError) as e:
-            raise ToolSpecificationError(
-                f"Invalid resource URI format: {resource_uri}"
-            ) from e
-        except GitLabClientError as e:
-            raise ToolSpecificationError(
-                f"Failed to fetch resource {resource_uri}: {e}"
-            ) from e
+    def _find_repo_data(self, uri_parts: str) -> tuple[str, str, str]:
+        # Find the branch part by looking for configured repos
+        # Since repository URLs can contain slashes, we need to match against config
 
-    async def _validate_resource_access(
-        self, repository: GitLabRepository, file_path: str
-    ) -> None:
+        for repo in self.config.gitlab.repositories:
+            # Check if URI starts with this repository URL and branch
+            expected_prefix = f"{repo.url}/{repo.branch}/"
+            if uri_parts.startswith(expected_prefix):
+                return (repo.url, repo.branch, uri_parts[len(expected_prefix) :])
+
+        exc_message = "Could not parse repository, branch, and file path from URI"
+        raise ValueError(exc_message)
+
+    async def _validate_resource_access(self, repository: GitLabRepository, file_path: str) -> None:
         """Validate that a file is allowed to be accessed.
 
         Args:
@@ -296,9 +267,8 @@ class ToolManager:
         # Load tool specification to check allowed resources
         spec = await self._load_repository_tools(repository)
         if not spec:
-            raise ToolSpecificationError(
-                f"No tool specification found for repository {repository.url}"
-            )
+            exc_message = f"No tool specification found for repository {repository.url}"
+            raise ToolSpecificationError(exc_message)
 
         # Check if file is in the resources list
         for resource in spec.resources:
@@ -313,9 +283,8 @@ class ToolManager:
                 return
 
         # File not found in resources
-        raise ToolSpecificationError(
-            f"File {file_path} not accessible - not listed in repository resources"
-        )
+        exc_message = f"File {file_path} not accessible - not listed in repository resources"
+        raise ToolSpecificationError(exc_message)
 
     def set_conflict_strategy(self, strategy: ConflictResolutionStrategy) -> None:
         """Update conflict resolution strategy.

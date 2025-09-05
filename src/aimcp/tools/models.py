@@ -42,7 +42,6 @@ class MCPToolAnnotations(BaseModel):
 
     # Tool behavior annotations as defined in spec
     # Extensible for future annotations
-    pass
 
 
 class MCPTool(BaseModel):
@@ -74,7 +73,7 @@ class ResolvedTool:
     repository: str
     branch: str
     specification: MCPTool
-    related_resources: list[MCPResource] = None  # Resources associated with this tool
+    related_resources: list[MCPResource] | None = None  # Resources associated with this tool
 
     def __post_init__(self) -> None:
         """Initialize related_resources if None."""

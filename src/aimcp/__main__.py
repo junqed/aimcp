@@ -6,8 +6,27 @@ from pathlib import Path
 import typer
 from pydantic import ValidationError
 
+from . import __version__
+from .cache.factory import create_cache_manager
 from .config.models import AIMCPConfig
+from .gitlab.client import GitLabClient
+from .server.factory import create_mcp_server
+from .utils.health import CacheHealthChecker, GitLabHealthChecker, SystemHealthChecker
 from .utils.logging import setup_logging
+
+
+def _exit_with_error(code: int = 1) -> None:
+    """Helper function to exit with error code."""
+    raise typer.Exit(code)
+
+
+def _exit_with_health_status(status: str) -> None:
+    """Helper function to exit with health-based error code."""
+    if status == "unhealthy":
+        raise typer.Exit(2)  # Critical health issues
+    if status == "degraded":
+        raise typer.Exit(1)  # Warning health issues
+
 
 app = typer.Typer(
     name="aimcp",
@@ -15,19 +34,31 @@ app = typer.Typer(
     add_completion=False,
 )
 
+# Module-level defaults for typer options
+CONFIG_OPTION = typer.Option(
+    None,
+    "--config",
+    "-c",
+    help="Path to configuration file",
+    exists=True,
+    file_okay=True,
+    dir_okay=False,
+    readable=True,
+)
+
+CONFIG_ARGUMENT = typer.Argument(
+    ...,
+    help="Path to configuration file",
+    exists=True,
+    file_okay=True,
+    dir_okay=False,
+    readable=True,
+)
+
 
 @app.command()
 def serve(
-    config: Path | None = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to configuration file",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
-    ),
+    config: Path | None = CONFIG_OPTION,
     host: str | None = typer.Option(
         None,
         "--host",
@@ -72,11 +103,9 @@ def serve(
         typer.echo(f"Monitoring {len(config_obj.gitlab.repositories)} repositories")
         typer.echo(f"Cache backend: {config_obj.cache.backend.value}")
 
-        from .server.factory import create_mcp_server
-
         async def run_server() -> None:
             server = await create_mcp_server(config_obj)
-            
+
             try:
                 server_runner = await server.get_server_runner()
                 typer.echo("✓ AIMCP server started successfully")
@@ -94,58 +123,40 @@ def serve(
 
     except ValidationError as e:
         typer.echo(f"Configuration error: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         typer.echo(f"Error starting server: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command("validate-config")
 def validate_config_command(
-    config: Path = typer.Argument(
-        ...,
-        help="Path to configuration file",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
-    ),
+    config: Path = CONFIG_ARGUMENT,
 ) -> None:
     """Validate configuration file."""
     try:
         config_obj = AIMCPConfig.create(config)
 
         typer.echo("✓ Configuration is valid")
-        typer.echo(
-            f"  Server: {config_obj.server.host}:{config_obj.server.port} ({config_obj.server.transport})"
-        )
+        typer.echo(f"  Server: {config_obj.server.host}:{config_obj.server.port} ({config_obj.server.transport})")
         typer.echo(f"  GitLab: {config_obj.gitlab.instance_url}")
         typer.echo(f"  Repositories: {len(config_obj.gitlab.repositories)}")
-        typer.echo(
-            f"  Cache: {config_obj.cache.backend} (TTL: {config_obj.cache.ttl_seconds}s)"
-        )
+        typer.echo(f"  Cache: {config_obj.cache.backend} (TTL: {config_obj.cache.ttl_seconds}s)")
 
     except ValidationError as e:
         typer.echo("✗ Configuration validation failed:", err=True)
         for error in e.errors():
             location = " -> ".join(str(loc) for loc in error["loc"])
             typer.echo(f"  {location}: {error['msg']}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         typer.echo(f"Error loading configuration: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command("test-gitlab")
 def test_gitlab_command(
-    config: Path = typer.Argument(
-        ...,
-        help="Path to configuration file",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
-    ),
+    config: Path = CONFIG_ARGUMENT,  # noqa: PT028
 ) -> None:
     """Test GitLab connectivity and repository access."""
     try:
@@ -153,8 +164,6 @@ def test_gitlab_command(
 
         typer.echo("Testing GitLab connectivity...")
         typer.echo(f"Instance: {config_obj.gitlab.instance_url}")
-
-        from .gitlab.client import GitLabClient
 
         async def test_connection() -> None:
             async with GitLabClient(config_obj.gitlab) as client:
@@ -165,7 +174,7 @@ def test_gitlab_command(
                     typer.echo(f"  GitLab version: {result['gitlab_version']}")
                 else:
                     typer.echo(f"✗ Connection failed: {result['error']}")
-                    raise typer.Exit(1)
+                    _exit_with_error()
 
                 # Test repository access
                 typer.echo("\nTesting repository access:")
@@ -179,15 +188,11 @@ def test_gitlab_command(
                         if has_tools:
                             try:
                                 tools_content = await client.fetch_tools_json(repo)
-                                typer.echo(
-                                    f"  ✓ Found tools.json ({len(tools_content)} bytes)"
-                                )
+                                typer.echo(f"  ✓ Found tools.json ({len(tools_content)} bytes)")
                             except Exception as e:
-                                typer.echo(
-                                    f"  ⚠ tools.json exists but failed to fetch: {e}"
-                                )
+                                typer.echo(f"  ⚠ tools.json exists but failed to fetch: {e}")
                         else:
-                            typer.echo(f"  ⚠ No tools.json found")
+                            typer.echo("  ⚠ No tools.json found")
 
                     except Exception as e:
                         typer.echo(f"✗ {repo.url} - Error: {e}")
@@ -197,10 +202,10 @@ def test_gitlab_command(
 
     except ValidationError as e:
         typer.echo(f"Configuration error: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         typer.echo(f"Error testing GitLab: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command("cache")
@@ -211,14 +216,7 @@ def cache_command() -> None:
 
 @app.command("cache-clear")
 def cache_clear_command(
-    config: Path = typer.Argument(
-        ...,
-        help="Path to configuration file",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
-    ),
+    config: Path = CONFIG_ARGUMENT,
 ) -> None:
     """Clear the cache."""
     try:
@@ -226,10 +224,9 @@ def cache_clear_command(
 
         typer.echo("Clearing cache...")
 
-        from .cache.factory import create_cache_manager
-
         async def clear_cache() -> None:
             cache_manager = create_cache_manager(config_obj.cache)
+
             async with cache_manager:
                 await cache_manager.clear_all()
                 typer.echo("✓ Cache cleared successfully")
@@ -238,80 +235,15 @@ def cache_clear_command(
 
     except ValidationError as e:
         typer.echo(f"Configuration error: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         typer.echo(f"Error clearing cache: {e}", err=True)
-        raise typer.Exit(1)
-
-
-@app.command("cache-stats")
-def cache_stats_command(
-    config: Path = typer.Argument(
-        ...,
-        help="Path to configuration file",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
-    ),
-) -> None:
-    """Show cache statistics."""
-    try:
-        config_obj = AIMCPConfig.create(config)
-
-        typer.echo("Cache statistics:")
-
-        from .cache.factory import create_cache_manager
-
-        async def show_stats() -> None:
-            cache_manager = create_cache_manager(config_obj.cache)
-            async with cache_manager:
-                stats = await cache_manager.get_stats()
-
-                typer.echo(f"Backend: {config_obj.cache.backend.value}")
-                typer.echo(f"Items: {stats.item_count}")
-                typer.echo(
-                    f"Hit rate: {stats.hit_rate:.2%} ({stats.hit_count}/{stats.hit_count + stats.miss_count})"
-                )
-
-                if stats.memory_usage_bytes:
-                    mb = stats.memory_usage_bytes / 1024 / 1024
-                    typer.echo(f"Memory usage: {mb:.2f} MB")
-
-                if stats.storage_usage_bytes:
-                    mb = stats.storage_usage_bytes / 1024 / 1024
-                    typer.echo(f"Storage usage: {mb:.2f} MB")
-
-                if stats.oldest_entry:
-                    typer.echo(f"Oldest entry: {stats.oldest_entry}")
-                if stats.newest_entry:
-                    typer.echo(f"Newest entry: {stats.newest_entry}")
-
-                # Show configured repositories
-                typer.echo(f"\nRepositories: {len(config_obj.gitlab.repositories)}")
-                for repo in config_obj.gitlab.repositories:
-                    typer.echo(f"  {repo.url}:{repo.branch}")
-
-        asyncio.run(show_stats())
-
-    except ValidationError as e:
-        typer.echo(f"Configuration error: {e}", err=True)
-        raise typer.Exit(1)
-    except Exception as e:
-        typer.echo(f"Error getting cache stats: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command("health-check")
 def health_check_command(
-    config: Path = typer.Argument(
-        ...,
-        help="Path to configuration file",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
-    ),
+    config: Path = CONFIG_ARGUMENT,
 ) -> None:
     """Check system health status."""
     try:
@@ -319,23 +251,13 @@ def health_check_command(
 
         typer.echo("Checking system health...")
 
-        from .cache.factory import create_cache_manager
-        from .gitlab.client import GitLabClient
-        from .utils.health import (
-            CacheHealthChecker,
-            GitLabHealthChecker,
-            SystemHealthChecker,
-        )
-
         async def check_health() -> None:
             # Create components
             cache_manager = create_cache_manager(config_obj.cache)
             gitlab_client = GitLabClient(config_obj.gitlab)
 
             # Create health checkers
-            gitlab_checker = GitLabHealthChecker(
-                gitlab_client, config_obj.gitlab.repositories
-            )
+            gitlab_checker = GitLabHealthChecker(gitlab_client, config_obj.gitlab.repositories)
             cache_checker = CacheHealthChecker(cache_manager)
 
             system_checker = SystemHealthChecker([gitlab_checker, cache_checker])
@@ -354,9 +276,7 @@ def health_check_command(
                 color = status_colors.get(system_health.status, typer.colors.WHITE)
                 typer.echo("\nSystem Health: ", nl=False)
                 typer.secho(system_health.status.upper(), fg=color, bold=True)
-                typer.echo(
-                    f"Checked at: {system_health.checked_at.strftime('%Y-%m-%d %H:%M:%S UTC')}"
-                )
+                typer.echo(f"Checked at: {system_health.checked_at.strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
                 for check in system_health.checks:
                     status_symbol = {
@@ -368,9 +288,7 @@ def health_check_command(
                     check_color = status_colors.get(check.status, typer.colors.WHITE)
 
                     typer.echo(f"\n{status_symbol} ", nl=False)
-                    typer.secho(
-                        f"{check.component.upper()}: {check.status}", fg=check_color
-                    )
+                    typer.secho(f"{check.component.upper()}: {check.status}", fg=check_color)
                     typer.echo(f"  Message: {check.message}")
 
                     if check.details:
@@ -379,26 +297,22 @@ def health_check_command(
                             typer.echo(f"    {key}: {value}")
 
                 # Set exit code based on overall health
-                if system_health.status == "unhealthy":
-                    raise typer.Exit(2)  # Critical health issues
-                elif system_health.status == "degraded":
-                    raise typer.Exit(1)  # Warning health issues
+                _exit_with_health_status(system_health.status)
                 # Healthy = exit code 0
 
         asyncio.run(check_health())
 
     except ValidationError as e:
         typer.echo(f"Configuration error: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         typer.echo(f"Error checking health: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
 def version() -> None:
     """Show version information."""
-    from . import __version__
 
     typer.echo(f"AIMCP version {__version__}")
 

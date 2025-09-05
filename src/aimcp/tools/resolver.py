@@ -4,13 +4,8 @@ from collections import defaultdict
 
 from ..config.models import GitLabRepository
 from ..utils.logging import get_logger
-from .models import (
-    ConflictResolutionStrategy,
-    MCPTool,
-    ResolvedTool,
-    ToolConflict,
-    ToolsSpecification,
-)
+from .models import ConflictResolutionStrategy, MCPResource, MCPTool, ResolvedTool, ToolConflict, ToolsSpecification
+
 
 logger = get_logger("tools.resolver")
 
@@ -25,7 +20,7 @@ class ToolConflictError(Exception):
             repos = ", ".join(conflict.repositories)
             conflict_details.append(f"'{conflict.name}' in repositories: {repos}")
 
-        message = f"Tool name conflicts detected:\n" + "\n".join(conflict_details)
+        message = "Tool name conflicts detected:\n" + "\n".join(conflict_details)
         super().__init__(message)
 
 
@@ -56,9 +51,7 @@ class ToolResolver:
             ToolConflictError: If strategy is ERROR and conflicts exist
         """
         # Group tools by name to detect conflicts
-        tools_by_name: dict[str, list[tuple[GitLabRepository, MCPTool]]] = defaultdict(
-            list
-        )
+        tools_by_name: dict[str, list[tuple[GitLabRepository, MCPTool]]] = defaultdict(list)
 
         for repo, spec in repo_specs.items():
             for tool in spec.tools:
@@ -89,17 +82,11 @@ class ToolResolver:
                 # Apply resolution strategy
                 match self.strategy:
                     case ConflictResolutionStrategy.PREFIX:
-                        resolved_tools.extend(
-                            self._resolve_with_prefix(repo_tools_list, conflict, repo_specs)
-                        )
+                        resolved_tools.extend(self._resolve_with_prefix(repo_tools_list, conflict, repo_specs))
                     case ConflictResolutionStrategy.PRIORITY:
-                        resolved_tools.extend(
-                            self._resolve_with_priority(repo_tools_list, conflict, repo_specs)
-                        )
+                        resolved_tools.extend(self._resolve_with_priority(repo_tools_list, conflict, repo_specs))
                     case ConflictResolutionStrategy.MERGE:
-                        resolved_tools.extend(
-                            self._resolve_with_merge(repo_tools_list, conflict, repo_specs)
-                        )
+                        resolved_tools.extend(self._resolve_with_merge(repo_tools_list, conflict, repo_specs))
                     case ConflictResolutionStrategy.ERROR:
                         # Will be handled after loop
                         continue
@@ -118,7 +105,11 @@ class ToolResolver:
         return resolved_tools, conflicts
 
     def _create_resolved_tool(
-        self, repo: GitLabRepository, tool: MCPTool, resolved_name: str, spec: ToolsSpecification
+        self,
+        repo: GitLabRepository,
+        tool: MCPTool,
+        resolved_name: str,
+        spec: ToolsSpecification,
     ) -> ResolvedTool:
         """Create a resolved tool with associated resources."""
         # Find related resources based on resourceRefs
@@ -126,7 +117,7 @@ class ToolResolver:
         if tool.resourceRefs:
             # Create a lookup map for resources by name
             resource_map = {resource.name: resource for resource in spec.resources}
-            
+
             # Add referenced resources that exist
             for resource_ref in tool.resourceRefs:
                 if resource_ref in resource_map:
@@ -136,9 +127,9 @@ class ToolResolver:
                         "Resource reference not found",
                         tool_name=tool.name,
                         resource_ref=resource_ref,
-                        available_resources=[r.name for r in spec.resources]
+                        available_resources=[r.name for r in spec.resources],
                     )
-        
+
         return ResolvedTool(
             original_name=tool.name,
             resolved_name=resolved_name,
@@ -166,7 +157,7 @@ class ToolResolver:
             resolved_tool = self._create_resolved_tool(repo, tool, resolved_name, spec)
             resolved_tools.append(resolved_tool)
 
-        conflict.resolution = f"Added repository prefixes to tool names"
+        conflict.resolution = "Added repository prefixes to tool names"
         logger.debug(
             "Resolved conflict with prefix strategy",
             tool_name=conflict.name,
@@ -208,16 +199,12 @@ class ToolResolver:
         base_repo, base_tool = repo_tools_list[0]
 
         # Merge descriptions
-        descriptions = [
-            tool.description for _, tool in repo_tools_list if tool.description
-        ]
-        merged_description = (
-            " | ".join(descriptions) if descriptions else base_tool.description
-        )
+        descriptions = [tool.description for _, tool in repo_tools_list if tool.description]
+        merged_description = " | ".join(descriptions) if descriptions else base_tool.description
 
         # Collect all resource references from merged tools
         all_resource_refs: list[str] = []
-        for repo, tool in repo_tools_list:
+        for _, tool in repo_tools_list:
             if tool.resourceRefs:
                 all_resource_refs.extend(tool.resourceRefs)
 
@@ -235,9 +222,9 @@ class ToolResolver:
             spec = repo_specs[repo]
             if tool.resourceRefs:
                 resource_map = {resource.name: resource for resource in spec.resources}
-                for resource_ref in tool.resourceRefs:
-                    if resource_ref in resource_map:
-                        all_resources.append(resource_map[resource_ref])
+                all_resources.extend(
+                    resource_map[resource_ref] for resource_ref in tool.resourceRefs if resource_ref in resource_map
+                )
 
         # Create resolved tool
         resolved_tool = ResolvedTool(
@@ -249,7 +236,7 @@ class ToolResolver:
             related_resources=all_resources,
         )
 
-        conflict.resolution = f"Merged descriptions from all repositories"
+        conflict.resolution = "Merged descriptions from all repositories"
         logger.debug(
             "Resolved conflict with merge strategy",
             tool_name=conflict.name,

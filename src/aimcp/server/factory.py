@@ -1,6 +1,6 @@
 """Server factory for creating MCP server instances."""
 
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from ..cache.factory import create_cache_manager
 from ..config.models import AIMCPConfig
@@ -8,6 +8,7 @@ from ..gitlab.client import GitLabClient
 from ..tools.manager import ToolManager
 from ..utils.logging import get_logger
 from .mcp_server import MCPServer
+
 
 logger = get_logger("mcp.factory")
 
@@ -46,10 +47,10 @@ async def create_mcp_server(config: AIMCPConfig) -> MCPServer:
 
 async def create_server_runner(config: AIMCPConfig) -> Callable[[], Awaitable[None]]:
     """Create MCP server and return runner coroutine.
-    
+
     Args:
         config: Application configuration
-        
+
     Returns:
         Server runner coroutine that can be passed to asyncio.run()
     """
