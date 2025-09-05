@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.13"
 
 [[package]]
-name = "aimcp"
+name = "airulermcp"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [

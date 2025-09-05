@@ -1,15 +1,15 @@
 [project]
-name = "aimcp"
+name = "airulermcp"
 version = "0.2.0"
 description = "MCP server for distributing AI rules from GitLab repositories to IDEs"
 readme = "README.md"
 requires-python = ">=3.13"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Lenny", email = "rusts-talus-9g@icloud.com"}
 ]
 maintainers = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Lenny", email = "rusts-talus-9g@icloud.com"}
 ]
 keywords = ["mcp", "model-context-protocol", "gitlab", "ai", "tools", "ide"]
 classifiers = [
@@ -42,10 +42,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/aimcp"
-Documentation = "https://github.com/yourusername/aimcp#readme"
-Repository = "https://github.com/yourusername/aimcp"
-Issues = "https://github.com/yourusername/aimcp/issues"
+Homepage = "https://github.com/junqed/aimcp"
+Documentation = "https://github.com/junqed/aimcp#readme"
+Repository = "https://github.com/junqed/aimcp"
+Issues = "https://github.com/junqed/aimcp/issues"
 
 [project.scripts]
 aimcp = "aimcp.__main__:main"
