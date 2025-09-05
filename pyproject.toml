@@ -98,5 +98,6 @@ warn_unreachable = true
 [tool.pytest.ini_options]
 addopts = [
     "--strict",
+    "--disable-pytest-warning",
 ]
 testpaths = ["tests"]
