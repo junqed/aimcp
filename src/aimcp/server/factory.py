@@ -6,6 +6,7 @@ from ..cache.factory import create_cache_manager
 from ..config.models import AIMCPConfig
 from ..gitlab.client import GitLabClient
 from ..tools.manager import ToolManager
+from ..utils.health import GitLabHealthChecker, SystemHealthChecker
 from ..utils.logging import get_logger
 from .mcp_server import MCPServer
 
@@ -39,6 +40,9 @@ async def create_mcp_server(config: AIMCPConfig) -> MCPServer:
         cache_manager=cache_manager,
         gitlab_client=gitlab_client,
         tool_manager=tool_manager,
+        health_checker=SystemHealthChecker(
+            [GitLabHealthChecker(gitlab_client, config.gitlab.repositories)],
+        ),
     )
 
     logger.info("MCP server created successfully")

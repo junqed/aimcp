@@ -1,18 +1,21 @@
 """FastMCP server implementation."""
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Any
 
 from fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.status import HTTP_200_OK, HTTP_503_SERVICE_UNAVAILABLE
 
 from ..cache.manager import CacheManager
 from ..config.models import AIMCPConfig
 from ..gitlab.client import GitLabClient
 from ..tools.manager import ToolManager
 from ..tools.models import ConflictResolutionStrategy, MCPResource, ResolvedTool
-from ..utils.errors import ServerNotInitializedError
+from ..utils.health import HealthStatus, SystemHealthChecker
 from ..utils.logging import get_logger
 
 
@@ -31,7 +34,9 @@ class MCPServer:
     cache_manager: CacheManager
     gitlab_client: GitLabClient
     tool_manager: ToolManager
-    _server: FastMCP | None = None
+    health_checker: SystemHealthChecker
+
+    _server: FastMCP = field(init=False)
 
     def __post_init__(self) -> None:
         """Initialize FastMCP server."""
@@ -59,12 +64,11 @@ class MCPServer:
         Returns:
             Async callable that runs the server with configured transport
         """
-        if not self._server:
-            exc_message = "Server not initialized"
-            raise RuntimeError(exc_message)
-
         # Start cache manager
         await self.cache_manager.start()
+
+        # Attach health check handler
+        self._attach_health_check()
 
         # Load and register tools
         await self._load_and_register_tools()
@@ -112,6 +116,17 @@ class MCPServer:
         """Async context manager exit."""
         await self.cleanup()
 
+    def _attach_health_check(self) -> None:
+        @self._server.custom_route("/health", methods=["GET"])
+        async def health_check(request: Request) -> JSONResponse:
+            system_check = await self.health_checker.check_all()
+            status_code = HTTP_200_OK
+
+            if system_check.status != HealthStatus.HEALTHY:
+                status_code = HTTP_503_SERVICE_UNAVAILABLE
+
+            return JSONResponse({"status": system_check.status, "service": "mcp-server"}, status_code=status_code)
+
     async def _load_and_register_tools(self) -> None:
         """Load tool specifications and register MCP tools."""
         try:
@@ -124,7 +139,7 @@ class MCPServer:
 
             # Register each tool with FastMCP
             for tool in resolved_tools:
-                await self._register_mcp_tool(tool)
+                self._register_mcp_tool(tool)
 
             logger.info("Tools loaded and registered successfully", count=len(resolved_tools))
 
@@ -132,7 +147,7 @@ class MCPServer:
             logger.exception("Failed to load and register tools", error=str(e))
             # Continue startup even if tool loading fails
 
-    async def _register_mcp_tool(self, tool: ResolvedTool) -> None:
+    def _register_mcp_tool(self, tool: ResolvedTool) -> None:
         """Register a single resolved tool with FastMCP.
 
         Args:
@@ -188,10 +203,6 @@ class MCPServer:
             }
 
         # Register with FastMCP using the tool decorator
-        if not self._server:
-            exc_message = "Server not initialized"
-            raise RuntimeError(exc_message)
-
         self._server.tool(
             tool_handler,
             name=tool.resolved_name,
@@ -207,33 +218,23 @@ class MCPServer:
 
     async def _run_stdio(self) -> None:
         """Run server with STDIO transport."""
-        if not self._server:
-            raise ServerNotInitializedError()
         await self._server.run_stdio_async()
 
     async def _run_http(self, host: str, port: int) -> None:
         """Run server with HTTP transport."""
-        if not self._server:
-            raise ServerNotInitializedError()
         await self._server.run_http_async(host=host, port=port)
 
     async def _run_sse(self, host: str, port: int) -> None:
         """Run server with SSE transport."""
-        if not self._server:
-            raise ServerNotInitializedError()
         await self._server.run_sse_async(host=host, port=port)
 
     @property
     def server(self) -> FastMCP:
         """Get the FastMCP server instance."""
-        if not self._server:
-            raise ServerNotInitializedError()
         return self._server
 
     def _register_builtin_tools(self) -> None:
         """Register built-in tools."""
-        if not self._server:
-            raise ServerNotInitializedError()
 
         @self._server.tool(
             name="load-resource",
