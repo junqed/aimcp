@@ -7,7 +7,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.status import HTTP_200_OK, HTTP_503_SERVICE_UNAVAILABLE
 
 from ..cache.manager import CacheManager
@@ -68,7 +68,7 @@ class MCPServer:
         await self.cache_manager.start()
 
         # Attach health check handler
-        self._attach_health_check()
+        self._attach_health_checks()
 
         # Load and register tools
         await self._load_and_register_tools()
@@ -116,9 +116,13 @@ class MCPServer:
         """Async context manager exit."""
         await self.cleanup()
 
-    def _attach_health_check(self) -> None:
-        @self._server.custom_route("/health", methods=["GET"])
-        async def health_check(request: Request) -> JSONResponse:
+    def _attach_health_checks(self) -> None:
+        @self._server.custom_route("/healthz", methods=["GET"])
+        async def health_check() -> Response:
+            return Response(status_code=HTTP_200_OK)
+
+        @self._server.custom_route("/ready", methods=["GET"])
+        async def ready_check() -> JSONResponse:
             system_check = await self.health_checker.check_all()
             status_code = HTTP_200_OK
 

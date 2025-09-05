@@ -1,6 +1,6 @@
 [project]
 name = "airulermcp"
-version = "0.3.0"
+version = "0.3.1"
 description = "MCP server for distributing AI rules from GitLab repositories to IDEs"
 readme = "README.md"
 requires-python = ">=3.13"

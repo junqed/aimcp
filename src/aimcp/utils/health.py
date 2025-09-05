@@ -84,48 +84,47 @@ class GitLabHealthChecker:
         """Check GitLab connectivity and repository access."""
         try:
             # Test basic connection
-            async with self.gitlab_client:
-                connection_result = await self.gitlab_client.test_connection()
+            connection_result = await self.gitlab_client.test_connection()
 
-                if connection_result["status"] != "success":
-                    return HealthCheckResult(
-                        component="gitlab",
-                        status=HealthStatus.UNHEALTHY,
-                        message=f"GitLab connection failed: {connection_result['error']}",
-                    )
-
-                # Test repository access
-                accessible_repos = 0
-                total_repos = len(self.repositories)
-
-                for repo in self.repositories:
-                    try:
-                        await self.gitlab_client.get_project(repo.url)
-                        accessible_repos += 1
-                    except Exception as e:
-                        logger.warning("Repository check failed", repository=repo.url, error=str(e))
-
-                if accessible_repos == 0:
-                    status = HealthStatus.UNHEALTHY
-                    message = "No repositories accessible"
-                elif accessible_repos < total_repos:
-                    status = HealthStatus.DEGRADED
-                    message = f"Only {accessible_repos}/{total_repos} repositories accessible"
-                else:
-                    status = HealthStatus.HEALTHY
-                    message = "All repositories accessible"
-
+            if connection_result["status"] != "success":
                 return HealthCheckResult(
                     component="gitlab",
-                    status=status,
-                    message=message,
-                    details={
-                        "user": connection_result.get("user", "unknown"),
-                        "gitlab_version": connection_result.get("gitlab_version", "unknown"),
-                        "accessible_repos": accessible_repos,
-                        "total_repos": total_repos,
-                    },
+                    status=HealthStatus.UNHEALTHY,
+                    message=f"GitLab connection failed: {connection_result['error']}",
                 )
+
+            # Test repository access
+            accessible_repos = 0
+            total_repos = len(self.repositories)
+
+            for repo in self.repositories:
+                try:
+                    await self.gitlab_client.get_project(repo.url)
+                    accessible_repos += 1
+                except Exception as e:
+                    logger.warning("Repository check failed", repository=repo.url, error=str(e))
+
+            if accessible_repos == 0:
+                status = HealthStatus.UNHEALTHY
+                message = "No repositories accessible"
+            elif accessible_repos < total_repos:
+                status = HealthStatus.DEGRADED
+                message = f"Only {accessible_repos}/{total_repos} repositories accessible"
+            else:
+                status = HealthStatus.HEALTHY
+                message = "All repositories accessible"
+
+            return HealthCheckResult(
+                component="gitlab",
+                status=status,
+                message=message,
+                details={
+                    "user": connection_result.get("user", "unknown"),
+                    "gitlab_version": connection_result.get("gitlab_version", "unknown"),
+                    "accessible_repos": accessible_repos,
+                    "total_repos": total_repos,
+                },
+            )
 
         except Exception as e:
             logger.exception("GitLab health check failed", error=str(e))
