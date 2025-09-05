@@ -3,4 +3,4 @@
 from importlib.metadata import version
 
 
-__version__ = version("aimcp")
+__version__ = version("airulermcp")
