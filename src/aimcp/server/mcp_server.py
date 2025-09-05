@@ -118,11 +118,11 @@ class MCPServer:
 
     def _attach_health_checks(self) -> None:
         @self._server.custom_route("/healthz", methods=["GET"])
-        async def health_check() -> Response:
+        async def health_check(_: Request) -> Response:
             return Response(status_code=HTTP_200_OK)
 
         @self._server.custom_route("/ready", methods=["GET"])
-        async def ready_check() -> JSONResponse:
+        async def ready_check(_: Request) -> JSONResponse:
             system_check = await self.health_checker.check_all()
             status_code = HTTP_200_OK
 

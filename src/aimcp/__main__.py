@@ -257,49 +257,48 @@ def health_check_command(
             gitlab_client = GitLabClient(config_obj.gitlab)
 
             # Run health checks
-            async with gitlab_client as gl_cl:
-                async with cache_manager as cm:
-                    # Create health checkers
-                    gitlab_checker = GitLabHealthChecker(gl_cl, config_obj.gitlab.repositories)
-                    cache_checker = CacheHealthChecker(cm)
+            async with gitlab_client as gl_cl, cache_manager as cm:
+                # Create health checkers
+                gitlab_checker = GitLabHealthChecker(gl_cl, config_obj.gitlab.repositories)
+                cache_checker = CacheHealthChecker(cm)
 
-                    system_checker = SystemHealthChecker([gitlab_checker, cache_checker])
+                system_checker = SystemHealthChecker([gitlab_checker, cache_checker])
 
-                    system_health = await system_checker.check_all()
+                system_health = await system_checker.check_all()
 
-                    # Display results
-                    status_colors = {
-                        "healthy": typer.colors.GREEN,
-                        "degraded": typer.colors.YELLOW,
-                        "unhealthy": typer.colors.RED,
-                    }
+                # Display results
+                status_colors = {
+                    "healthy": typer.colors.GREEN,
+                    "degraded": typer.colors.YELLOW,
+                    "unhealthy": typer.colors.RED,
+                }
 
-                    color = status_colors.get(system_health.status, typer.colors.WHITE)
-                    typer.echo("\nSystem Health: ", nl=False)
-                    typer.secho(system_health.status.upper(), fg=color, bold=True)
-                    typer.echo(f"Checked at: {system_health.checked_at.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+                color = status_colors.get(system_health.status, typer.colors.WHITE)
+                typer.echo("\nSystem Health: ", nl=False)
+                typer.secho(system_health.status.upper(), fg=color, bold=True)
+                typer.echo(f"Checked at: {system_health.checked_at.strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
-                    for check in system_health.checks:
-                        status_symbol = {
-                            "healthy": "✓",
-                            "degraded": "⚠",
-                            "unhealthy": "✗",
-                        }.get(check.status, "?")
+                for check in system_health.checks:
+                    status_symbol = {
+                        "healthy": "✓",
+                        "degraded": "⚠",
+                        "unhealthy": "✗",
+                    }.get(check.status, "?")
 
-                        check_color = status_colors.get(check.status, typer.colors.WHITE)
+                    check_color = status_colors.get(check.status, typer.colors.WHITE)
 
-                        typer.echo(f"\n{status_symbol} ", nl=False)
-                        typer.secho(f"{check.component.upper()}: {check.status}", fg=check_color)
-                        typer.echo(f"  Message: {check.message}")
+                    typer.echo(f"\n{status_symbol} ", nl=False)
+                    typer.secho(f"{check.component.upper()}: {check.status}", fg=check_color)
+                    typer.echo(f"  Message: {check.message}")
 
-                        if check.details:
-                            typer.echo("  Details:")
-                            for key, value in check.details.items():
-                                typer.echo(f"    {key}: {value}")
+                    if check.details:
+                        typer.echo("  Details:")
+                        for key, value in check.details.items():
+                            typer.echo(f"    {key}: {value}")
 
-                    # Set exit code based on overall health
-                    _exit_with_health_status(system_health.status)
-                    # Healthy = exit code 0
+                # Set exit code based on overall health
+                _exit_with_health_status(system_health.status)
+                # Healthy = exit code 0
 
         asyncio.run(check_health())
 
